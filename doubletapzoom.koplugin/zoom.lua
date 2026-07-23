@@ -1,0 +1,467 @@
+--[[--
+Zoom module for Double Tap Zoom plugin.
+Double Tap anywhere on the page to zoom into a grid cell (computed dynamically
+from the touch position). While zoomed: tap left/right to move between cells,
+swipe up/down to adjust zoom level, Double Tap to exit.
+@module holdzoom.zoom
+]]--
+
+local Device = require("device")
+local Event = require("ui/event")
+local UIManager = require("ui/uimanager")
+local logger = require("logger")
+local Screen = Device.screen
+
+local Zoom = {
+    enabled = true,
+    zoom_power = 1.0,
+    expanded = false,
+    center_x = nil,
+    center_y = nil,
+    pan_last_pos = nil,          -- last pan position for delta calculation
+    original_zoom_mode = nil,
+    base_zoom = nil,             -- fit-page zoom captured when entering zoom mode
+    current_cell = nil,          -- current cell index (1..grid_cols*grid_rows)
+    grid_cols = 2,
+    grid_rows = 2,
+    ui = nil,
+    -- Fixed content dimensions captured once when entering zoom mode.
+    -- They stay constant even when zoom_power changes.
+    content_w = nil,
+    content_h = nil,
+}
+
+function Zoom:init(ui, Settings)
+    self.ui = ui
+    self.enabled = Settings:get("zoom_enabled")
+    self.default_zoom_power = Settings:get("zoom_power")
+    self.zoom_power = self.default_zoom_power
+    self.grid_cols = Settings:get("grid_cols") or 2
+    self.grid_rows = Settings:get("grid_rows") or 2
+    self.current_cell = nil
+    self.expanded = false
+    self.center_x = nil
+    self.center_y = nil
+    self.pan_last_pos = nil
+    self.original_zoom_mode = nil
+    self.base_zoom = nil
+    self.content_w = nil
+    self.content_h = nil
+    logger.info("Zoom: initialized with default_zoom_power=", self.default_zoom_power, "grid=", self.grid_cols, "x", self.grid_rows)
+end
+
+function Zoom:reset()
+    self.expanded = false
+    self.center_x = nil
+    self.center_y = nil
+    self.pan_last_pos = nil
+    self.original_zoom_mode = nil
+    self.current_cell = nil
+    self.base_zoom = nil
+    self.content_w = nil
+    self.content_h = nil
+    logger.info("Zoom: reset")
+end
+
+function Zoom:setupTouchZones(ui)
+    self.ui = ui
+    if not Device:isTouchDevice() then return end
+
+    local full_screen = { ratio_x = 0, ratio_y = 0, ratio_w = 1, ratio_h = 1 }
+
+    local zones = {
+        -- Double tap to enter/exit zoom
+        {
+            id = "holdzoom_doubletap",
+            ges = "double_tap",
+            screen_zone = full_screen,
+            handler = function(ges) return self:onDoubleTap(ges) end,
+        },
+        -- Tap left/right to navigate cells
+        {
+            id = "holdzoom_tap",
+            ges = "tap",
+            screen_zone = full_screen,
+            handler = function(ges) return self:onTap(ges) end,
+        },
+        -- Swipe up/down to adjust zoom level
+        {
+            id = "holdzoom_swipe",
+            ges = "swipe",
+            screen_zone = full_screen,
+            handler = function(ges) return self:onSwipe(ges) end,
+        },
+        -- Pan to move the view (updates center_x/y)
+        {
+            id = "holdzoom_pan",
+            ges = "pan",
+            screen_zone = full_screen,
+            handler = function(ges) return self:onPan(ges) end,
+        },
+        {
+            id = "holdzoom_pan_release",
+            ges = "pan_release",
+            screen_zone = full_screen,
+            handler = function(ges) return self:onPanRelease(ges) end,
+        },
+    }
+
+    ui:registerTouchZones(zones)
+    logger.info("Zoom: touch zones registered")
+end
+
+-- Returns the actual page-rendering area (width, height).
+-- When zoomed, we use the captured dimensions to keep consistency.
+function Zoom:getContentDimensions()
+    if self.expanded and self.content_w and self.content_h then
+        return self.content_w, self.content_h
+    end
+    local zooming = self.ui and self.ui.zooming
+    if zooming and zooming.dimen and zooming.dimen.w and zooming.dimen.h then
+        return zooming.dimen.w, zooming.dimen.h
+    end
+    return Screen:getWidth(), Screen:getHeight()
+end
+
+-- Returns the cell index (1..total) for a given touch position.
+function Zoom:cellFromPos(pos)
+    if not pos then return nil end
+    local w, h = self:getContentDimensions()
+    local col = math.floor(pos.x / (w / self.grid_cols)) + 1
+    local row = math.floor(pos.y / (h / self.grid_rows)) + 1
+    col = math.min(col, self.grid_cols)
+    row = math.min(row, self.grid_rows)
+    local cell = (row - 1) * self.grid_cols + col
+    logger.info("Zoom: cellFromPos: pos=(", pos.x, ",", pos.y, ") -> cell=", cell, "col=", col, "row=", row)
+    return cell
+end
+
+-- Calculate center coordinates for a given cell using the fixed content dimensions.
+function Zoom:calcCenterForCell(cell)
+    local col = (cell - 1) % self.grid_cols
+    local row = math.floor((cell - 1) / self.grid_cols)
+    local cell_w = self.content_w / self.grid_cols
+    local cell_h = self.content_h / self.grid_rows
+    return col * cell_w + cell_w / 2, row * cell_h + cell_h / 2
+end
+
+-- Determine the cell index from the current center position.
+-- Used when the user moves via pan to update current_cell.
+function Zoom:getCellFromCenter()
+    if not self.center_x or not self.center_y or not self.content_w or not self.content_h then
+        return nil
+    end
+    local col = math.floor(self.center_x / (self.content_w / self.grid_cols)) + 1
+    local row = math.floor(self.center_y / (self.content_h / self.grid_rows)) + 1
+    col = math.min(col, self.grid_cols)
+    row = math.min(row, self.grid_rows)
+    local cell = (row - 1) * self.grid_cols + col
+    logger.info("Zoom: getCellFromCenter: center=(", self.center_x, ",", self.center_y, ") -> cell=", cell)
+    return cell
+end
+
+function Zoom:onDoubleTap(ges)
+    if not self.enabled then return false end
+    local pos = ges and ges.pos
+    if not pos then return false end
+
+    -- If already zoomed, toggle off (collapse)
+    if self.expanded then
+        logger.info("Zoom: double tap -> collapse")
+        self:collapse()
+        return true
+    end
+
+    local cell = self:cellFromPos(pos)
+    if cell then
+        logger.info("Zoom: double tap -> zoomToCell", cell)
+        self:zoomToCell(cell)
+    end
+    return true
+end
+
+-- Handle tap while zoomed: move to previous/next cell based on side tapped
+-- (wrap-around). Cells are numbered row-major, so this is a simple +1/-1.
+function Zoom:onTap(ges)
+    logger.info("Zoom: onTap ENTRY")
+    if not self.expanded then
+        logger.info("Zoom: onTap ignored (not expanded)")
+        return false
+    end
+    if not self.current_cell then
+        logger.info("Zoom: onTap ignored (current_cell is nil)")
+        return false
+    end
+
+    local pos = ges and ges.pos
+    if not pos then return false end
+
+    local sw = Screen:getWidth()
+    local is_left = pos.x < sw / 2
+    local total = self.grid_cols * self.grid_rows
+
+    local next_cell
+    if is_left then
+        next_cell = self.current_cell - 1
+        if next_cell < 1 then next_cell = total end
+    else
+        next_cell = self.current_cell + 1
+        if next_cell > total then next_cell = 1 end
+    end
+
+    logger.info("Zoom: tap -> moving from cell", self.current_cell, "to", next_cell, "(left=", is_left, ")")
+    self:zoomToCell(next_cell)
+    return true
+end
+
+-- Swipe up while zoomed: increase zoom (towards the configurable max).
+-- Swipe down while zoomed: back to the default zoom level.
+-- Any other direction (left/right) is left alone, e.g. for page turning.
+-- IMPORTANT: if the user moved the view via native pan, we determine the current
+-- cell from the swipe start position, so the zoom adjustment applies to
+-- the cell being viewed, not the original one.
+function Zoom:onSwipe(ges)
+    if not self.expanded then
+        logger.info("Zoom: onSwipe ignored (not expanded)")
+        return false
+    end
+
+    local direction = ges and ges.direction
+    local pos = ges and ges.pos  -- start position of the swipe
+
+    -- Update current cell based on swipe start position.
+    if pos then
+        local cell = self:cellFromPos(pos)
+        if cell and cell ~= self.current_cell then
+            self.current_cell = cell
+            self.center_x, self.center_y = self:calcCenterForCell(cell)
+            logger.info("Zoom: onSwipe: updated cell from swipe position to", cell)
+        end
+    end
+
+    logger.info("Zoom: onSwipe direction=", direction, "current_cell=", self.current_cell, "zoom_power=", self.zoom_power)
+
+    if direction == "north" then
+        self:increaseZoomStep()
+        return true
+    elseif direction == "south" then
+        self:decreaseZoomStep()
+        return true
+    end
+
+    logger.info("Zoom: onSwipe ignored (direction=", direction, ")")
+    return false
+end
+
+-- Pan handling: update center_x/y based on movement delta.
+function Zoom:onPan(ges)
+    if not self.expanded then return false end
+    local pos = ges and ges.pos
+    if not pos then return false end
+
+    if self.pan_last_pos then
+        local dx = pos.x - self.pan_last_pos.x
+        local dy = pos.y - self.pan_last_pos.y
+        self.center_x = self.center_x - dx
+        self.center_y = self.center_y - dy
+        self:updateZoomCenter()
+        UIManager:setDirty(self.ui.view, "partial")
+    end
+
+    self.pan_last_pos = pos
+    return true
+end
+
+function Zoom:onPanRelease(ges)
+    if not self.expanded then return false end
+    self.pan_last_pos = nil
+    -- After panning, update current_cell based on the new center.
+    local cell_from_center = self:getCellFromCenter()
+    if cell_from_center and cell_from_center ~= self.current_cell then
+        self.current_cell = cell_from_center
+        logger.info("Zoom: pan release: updated current_cell to", self.current_cell)
+    end
+    UIManager:setDirty(self.ui.view, "full")
+    return true
+end
+
+function Zoom:updateZoomCenter()
+    local view = self.ui.view
+    if view and view.SetZoomCenter then
+        local scale = self.zoom_power or 1
+        logger.info("Zoom: updateZoomCenter: current_cell=", self.current_cell,
+            "center=(", self.center_x, ",", self.center_y, ")",
+            "scale=", scale,
+            "scaled=(", self.center_x * scale, ",", self.center_y * scale, ")")
+        -- KOReader expects coordinates in points (1/2 pixel), hence the *2 factor
+        view:SetZoomCenter(self.center_x * scale * 2, self.center_y * scale * 2)
+    else
+        logger.info("Zoom: updateZoomCenter: view or SetZoomCenter missing")
+    end
+end
+
+-- Zoom into the specified cell (1..total)
+function Zoom:zoomToCell(cell)
+    local view = self.ui.view
+    local zooming = self.ui.zooming
+    if not view or not zooming then
+        logger.info("Zoom: zoomToCell: view or zooming missing")
+        return
+    end
+
+    logger.info("Zoom: zoomToCell called with cell=", cell)
+
+    if not self.expanded then
+        -- Capture content dimensions once when entering zoom mode.
+        self.content_w, self.content_h = self:getContentDimensions()
+        self.original_zoom_mode = zooming.zoom_mode
+        self.base_zoom = zooming.zoom or 1
+        self.expanded = true
+        logger.info("Zoom: zoomToCell: entering zoom mode, content_w=", self.content_w, "content_h=", self.content_h, "base_zoom=", self.base_zoom)
+
+        -- Switch to "free" zoom mode without triggering KOReader's SetZoomMode event.
+        -- This avoids a crash in koptoptions.lua if the user opens the config dialog.
+        zooming.zoom_mode = "free"
+        view.zoom_mode = "free"
+    end
+
+    self.current_cell = cell
+    self.center_x, self.center_y = self:calcCenterForCell(cell)
+
+    logger.info("Zoom: zoomToCell: cell=", cell,
+        "center=(", self.center_x, ",", self.center_y, ")",
+        "zoom_power=", self.zoom_power)
+
+    local new_zoom = self.base_zoom * self.zoom_power
+    zooming.zoom = new_zoom
+
+    view:onZoomUpdate(new_zoom)
+
+    self:updateZoomCenter()
+
+    self.ui:handleEvent(Event:new("RedrawCurrentView"))
+    UIManager:setDirty(view, "full")
+
+    logger.info("Zoom: zoomed to cell", cell)
+end
+
+function Zoom:collapse()
+    local zooming = self.ui.zooming
+    if not zooming then return end
+
+    logger.info("Zoom: collapse called, current_cell=", self.current_cell)
+
+    self.expanded = false
+    self.current_cell = nil
+    self.base_zoom = nil
+    self.content_w = nil
+    self.content_h = nil
+    self.pan_last_pos = nil
+    self.zoom_power = self.default_zoom_power
+
+    -- Restore the original zoom mode via event.
+    self.ui:handleEvent(Event:new("SetZoomMode", self.original_zoom_mode or "page"))
+    self.original_zoom_mode = nil
+
+    self.ui:handleEvent(Event:new("RedrawCurrentView"))
+    UIManager:setDirty(self.ui.view, "full")
+
+    logger.info("Zoom: collapsed")
+end
+
+function Zoom:toggle()
+    self.enabled = not self.enabled
+    if not self.enabled and self.expanded then
+        self:collapse()
+    end
+    return self.enabled
+end
+
+function Zoom:setZoomPower(value)
+    self.default_zoom_power = value
+    self.zoom_power = value
+
+    if self.expanded then
+        self:updateZoomFactor(value)
+    end
+end
+
+function Zoom:setGrid(cols, rows)
+    self.grid_cols = cols
+    self.grid_rows = rows
+end
+
+-- Update the zoom factor (zoom_power) and recalculate the center
+-- based on the current actual position (derived from center_x/y or from swipe start).
+-- This ensures that even if the user moved via pan or other gestures,
+-- the new zoom applies to the current visible area.
+function Zoom:updateZoomFactor(new_factor)
+    if not self.expanded then
+        logger.info("Zoom: updateZoomFactor ignored (not expanded)")
+        return
+    end
+
+    logger.info("Zoom: updateZoomFactor: old=", self.zoom_power, "new=", new_factor,
+        "current_cell=", self.current_cell)
+
+    self.zoom_power = new_factor
+
+    -- Determine the cell from the current center position.
+    -- This is the key fix: if the user moved via pan, we recalculate the cell.
+    local cell_from_center = self:getCellFromCenter()
+    if cell_from_center then
+        self.current_cell = cell_from_center
+        self.center_x, self.center_y = self:calcCenterForCell(self.current_cell)
+        logger.info("Zoom: updateZoomFactor: recalculated center from center-derived cell=", self.current_cell,
+            "-> center=(", self.center_x, ",", self.center_y, ")")
+    else
+        -- Fallback: if we cannot determine the cell, keep the saved cell.
+        if self.current_cell then
+            self.center_x, self.center_y = self:calcCenterForCell(self.current_cell)
+            logger.info("Zoom: updateZoomFactor: fallback to saved current_cell=", self.current_cell)
+        else
+            logger.info("Zoom: updateZoomFactor: cannot determine cell, keeping center as is")
+        end
+    end
+
+    local view = self.ui.view
+    local zooming = self.ui.zooming
+    if not view or not zooming then
+        logger.info("Zoom: updateZoomFactor: view or zooming missing")
+        return
+    end
+
+    local new_zoom = self.base_zoom * self.zoom_power
+    zooming.zoom = new_zoom
+    view:onZoomUpdate(new_zoom)
+    self:updateZoomCenter()
+    UIManager:setDirty(view, "full")
+
+    logger.info("Zoom: updateZoomFactor done, zoom_power=", self.zoom_power)
+end
+
+function Zoom:increaseZoomStep()
+    local step = 0.25
+    local max_zoom = 3.0
+    local new = math.min(self.zoom_power + step, max_zoom)
+    logger.info("Zoom: increaseZoomStep: from", self.zoom_power, "to", new)
+    if new ~= self.zoom_power then
+        self:updateZoomFactor(new)
+    else
+        logger.info("Zoom: increaseZoomStep: already at max", max_zoom)
+    end
+end
+
+function Zoom:decreaseZoomStep()
+    local step = 0.25
+    local min_zoom = self.default_zoom_power
+    local new = math.max(self.zoom_power - step, min_zoom)
+    logger.info("Zoom: decreaseZoomStep: from", self.zoom_power, "to", new)
+    if new ~= self.zoom_power then
+        self:updateZoomFactor(new)
+    else
+        logger.info("Zoom: decreaseZoomStep: already at min", min_zoom)
+    end
+end
+
+return Zoom
