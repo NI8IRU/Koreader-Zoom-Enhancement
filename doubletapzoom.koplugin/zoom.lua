@@ -130,8 +130,8 @@ function Zoom:cellFromPos(pos)
     local w, h = self:getContentDimensions()
     local col = math.floor(pos.x / (w / self.grid_cols)) + 1
     local row = math.floor(pos.y / (h / self.grid_rows)) + 1
-    col = math.min(col, self.grid_cols)
-    row = math.min(row, self.grid_rows)
+    col = math.max(1, math.min(col, self.grid_cols))
+    row = math.max(1, math.min(row, self.grid_rows))
     local cell = (row - 1) * self.grid_cols + col
     logger.info("Zoom: cellFromPos: pos=(", pos.x, ",", pos.y, ") -> cell=", cell, "col=", col, "row=", row)
     return cell
@@ -199,22 +199,23 @@ function Zoom:onSwipe(ges)
         logger.info("Zoom: onSwipe ignored (not expanded)")
         return false
     end
-
     local direction = ges and ges.direction
-    local pos = ges and ges.pos  -- start position of the swipe
-
-    -- Update current cell based on swipe start position.
+    local pos = ges and ges.pos
+    logger.info("Zoom: onSwipe: RAW ges.pos=(", pos and pos.x, ",", pos and pos.y, ")",
+        "direction=", direction,
+        "current_cell_before=", self.current_cell,
+        "center_before=(", self.center_x, ",", self.center_y, ")")
     if pos then
-        local cell = self:cellFromPos(pos)
+        local page_x, page_y = self:screenPosToPagePos(pos)
+        local cell = self:cellFromPos({x = page_x, y = page_y})
+        logger.info("Zoom: onSwipe: computed cell=", cell, "vs current_cell=", self.current_cell)
         if cell and cell ~= self.current_cell then
             self.current_cell = cell
             self.center_x, self.center_y = self:calcCenterForCell(cell)
-            logger.info("Zoom: onSwipe: updated cell from swipe position to", cell)
+            logger.info("Zoom: onSwipe: updated cell to", cell, "new center=(", self.center_x, ",", self.center_y, ")")
         end
     end
-
     logger.info("Zoom: onSwipe direction=", direction, "current_cell=", self.current_cell, "zoom_power=", self.zoom_power)
-
     if direction == "north" then
         self:increaseZoomStep()
         return true
@@ -222,7 +223,6 @@ function Zoom:onSwipe(ges)
         self:decreaseZoomStep()
         return true
     end
-
     logger.info("Zoom: onSwipe ignored (direction=", direction, ")")
     return false
 end
@@ -440,6 +440,33 @@ end
 function Zoom:setTriggerGesture(gesture)
     self.trigger_gesture = gesture
     logger.info("Zoom: setTriggerGesture: trigger_gesture=", gesture)
+end
+
+-- Converts a screen-space touch position into page-space coordinates,
+-- accounting for the current zoom level and viewport center.
+-- Falls back to identity mapping when not zoomed (screen == page).
+function Zoom:screenPosToPagePos(pos)
+    if not self.expanded then
+        logger.info("Zoom: screenPosToPagePos: not expanded, identity mapping pos=(", pos.x, ",", pos.y, ")")
+        return pos.x, pos.y
+    end
+    -- NOTE: content_w/content_h are already in screen-space units at zoom_power=1
+    -- (base_zoom is baked into them), so only zoom_power is needed here —
+    -- NOT base_zoom * zoom_power (that would double-apply base_zoom).
+    local scale = self.zoom_power
+    local screen_w, screen_h = Screen:getWidth(), Screen:getHeight()
+    logger.info("Zoom: screenPosToPagePos: input pos=(", pos.x, ",", pos.y, ")",
+        "screen=(", screen_w, ",", screen_h, ")",
+        "center=(", self.center_x, ",", self.center_y, ")",
+        "scale(zoom_power)=", scale,
+        "content=(", self.content_w, ",", self.content_h, ")")
+    local page_x = self.center_x + (pos.x - screen_w / 2) / scale
+    local page_y = self.center_y + (pos.y - screen_h / 2) / scale
+    logger.info("Zoom: screenPosToPagePos: pre-clamp page=(", page_x, ",", page_y, ")")
+    page_x = math.max(0, math.min(page_x, self.content_w))
+    page_y = math.max(0, math.min(page_y, self.content_h))
+    logger.info("Zoom: screenPosToPagePos: post-clamp page=(", page_x, ",", page_y, ")")
+    return page_x, page_y
 end
 
 return Zoom
