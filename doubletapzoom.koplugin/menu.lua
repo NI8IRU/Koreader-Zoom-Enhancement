@@ -16,10 +16,41 @@ function Menu:showMessage(text, timeout)
     })
 end
 
-local ZOOM_POWER_OPTIONS = { 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0, 3.5, 4.0 }
+local ZOOM_POWER_OPTIONS = { 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0 }
+local TRIGGER_GESTURE_OPTIONS = {
+    { id = "double_tap", text = _("Double tap") },
+    { id = "single_tap", text = _("Single tap") },
+}
 
 function Menu:build(plugin, Zoom, AutoRotate, Settings)
     local self_menu = self
+
+    -- Trigger gesture
+    local trigger_gesture_items = {}
+    for _, opt in ipairs(TRIGGER_GESTURE_OPTIONS) do
+        table.insert(trigger_gesture_items, {
+            text = opt.text,
+            checked_func = function() return Zoom.trigger_gesture == opt.id end,
+            callback = function()
+                Zoom:setTriggerGesture(opt.id)
+                if opt.id == "single_tap" then
+                    self_menu:showMessage(
+                        "Trigger: Single tap\n\n" ..
+                        "Warning: this may conflict with other single-tap actions " ..
+                        "(menu, toolbar, page turn) depending on the reader/document type.",
+                        4
+                    )
+                else
+                    self_menu:showMessage(string.format("Trigger: %s", opt.text), 1)
+                end
+            end,
+            hold_callback = function()
+                Zoom:setTriggerGesture(opt.id)
+                Settings:set("zoom_trigger_gesture", opt.id)
+                self_menu:showMessage(string.format("Default trigger: %s", opt.text))
+            end,
+        })
+    end
 
     -- Zoom power submenu
     local zoom_power_items = {}
@@ -113,6 +144,10 @@ function Menu:build(plugin, Zoom, AutoRotate, Settings)
                 sub_item_table = grid_rows_items,
             },
             {
+                text = _("Zoom trigger gesture"),
+                sub_item_table = trigger_gesture_items,
+            },
+            {
                 text = _("Auto-rotate landscape pages"),
                 checked_func = function() return AutoRotate.enabled end,
                 callback = function()
@@ -156,21 +191,6 @@ function Menu:build(plugin, Zoom, AutoRotate, Settings)
                         end,
                     },
                 },
-            },
-            {
-                text = _("Try to disable native Panel Zoom (experimental)"),
-                checked_func = function() return Settings:get("override_native_panelzoom") end,
-                callback = function()
-                    local current = Settings:get("override_native_panelzoom")
-                    Settings:set("override_native_panelzoom", not current)
-                    self_menu:showMessage(
-                        (not current)
-                        and "Will attempt to disable native Panel Zoom on next document open.\n" ..
-                            "This is best-effort: if it has no effect, disable Panel Zoom\n" ..
-                            "manually from Settings > Document > Panel zoom."
-                        or "Native Panel Zoom override disabled."
-                    , 4)
-                end,
             },
             {
                 text = _("About"),

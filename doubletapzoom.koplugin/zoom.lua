@@ -38,6 +38,7 @@ function Zoom:init(ui, Settings)
     self.zoom_power = self.default_zoom_power
     self.grid_cols = Settings:get("grid_cols") or 2
     self.grid_rows = Settings:get("grid_rows") or 2
+    self.trigger_gesture = Settings:get("zoom_trigger_gesture") or "double_tap"
     self.current_cell = nil
     self.expanded = false
     self.center_x = nil
@@ -161,56 +162,29 @@ function Zoom:getCellFromCenter()
 end
 
 function Zoom:onDoubleTap(ges)
+    if self.trigger_gesture ~= "double_tap" then return false end
+    return self:handleZoomGesture(ges, "double tap")
+end
+
+function Zoom:onTap(ges)
+    if self.trigger_gesture ~= "single_tap" then return false end
+    return self:handleZoomGesture(ges, "single tap")
+end
+
+function Zoom:handleZoomGesture(ges, source)
     if not self.enabled then return false end
     local pos = ges and ges.pos
     if not pos then return false end
-
-    -- If already zoomed, toggle off (collapse)
     if self.expanded then
-        logger.info("Zoom: double tap -> collapse")
+        logger.info("Zoom: ", source, " -> collapse")
         self:collapse()
         return true
     end
-
     local cell = self:cellFromPos(pos)
     if cell then
-        logger.info("Zoom: double tap -> zoomToCell", cell)
+        logger.info("Zoom: ", source, " -> zoomToCell", cell)
         self:zoomToCell(cell)
     end
-    return true
-end
-
--- Handle tap while zoomed: move to previous/next cell based on side tapped
--- (wrap-around). Cells are numbered row-major, so this is a simple +1/-1.
-function Zoom:onTap(ges)
-    logger.info("Zoom: onTap ENTRY")
-    if not self.expanded then
-        logger.info("Zoom: onTap ignored (not expanded)")
-        return false
-    end
-    if not self.current_cell then
-        logger.info("Zoom: onTap ignored (current_cell is nil)")
-        return false
-    end
-
-    local pos = ges and ges.pos
-    if not pos then return false end
-
-    local sw = Screen:getWidth()
-    local is_left = pos.x < sw / 2
-    local total = self.grid_cols * self.grid_rows
-
-    local next_cell
-    if is_left then
-        next_cell = self.current_cell - 1
-        if next_cell < 1 then next_cell = total end
-    else
-        next_cell = self.current_cell + 1
-        if next_cell > total then next_cell = 1 end
-    end
-
-    logger.info("Zoom: tap -> moving from cell", self.current_cell, "to", next_cell, "(left=", is_left, ")")
-    self:zoomToCell(next_cell)
     return true
 end
 
@@ -288,12 +262,11 @@ end
 function Zoom:updateZoomCenter()
     local view = self.ui.view
     if view and view.SetZoomCenter then
-        local scale = self.zoom_power or 1
+        local scale = self.base_zoom * self.zoom_power
         logger.info("Zoom: updateZoomCenter: current_cell=", self.current_cell,
             "center=(", self.center_x, ",", self.center_y, ")",
             "scale=", scale,
             "scaled=(", self.center_x * scale, ",", self.center_y * scale, ")")
-        -- KOReader expects coordinates in points (1/2 pixel), hence the *2 factor
         view:SetZoomCenter(self.center_x * scale * 2, self.center_y * scale * 2)
     else
         logger.info("Zoom: updateZoomCenter: view or SetZoomCenter missing")
@@ -462,6 +435,11 @@ function Zoom:decreaseZoomStep()
     else
         logger.info("Zoom: decreaseZoomStep: already at min", min_zoom)
     end
+end
+
+function Zoom:setTriggerGesture(gesture)
+    self.trigger_gesture = gesture
+    logger.info("Zoom: setTriggerGesture: trigger_gesture=", gesture)
 end
 
 return Zoom

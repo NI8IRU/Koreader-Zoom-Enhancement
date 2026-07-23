@@ -15,7 +15,6 @@ local DEFAULTS = {
     zoom_power = 1.50,
     autorotate_enabled = true,
     rotate_clockwise = true,
-    override_native_panelzoom = false,
     grid_cols = 2,
     grid_rows = 2,
 }

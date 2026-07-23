@@ -31,27 +31,6 @@ function HoldZoom:onReaderReady()
     Zoom:init(self.ui, Settings)
     Zoom:setupTouchZones(self.ui)
     AutoRotate:init(Settings)
-
-    if Settings:get("override_native_panelzoom") then
-        self:tryDisableNativePanelZoom()
-    end
-end
-
--- Best-effort attempt to disable KOReader's native Panel Zoom so it
--- doesn't compete with this plugin's own hold gesture. The exact internal
--- config field for this isn't publicly documented, so this is wrapped in
--- pcall and silently does nothing if it fails. If it doesn't work for you,
--- disable Panel Zoom manually: Settings > Document > Panel zoom.
-function HoldZoom:tryDisableNativePanelZoom()
-    local ok, err = pcall(function()
-        local configurable = self.ui.document and self.ui.document.configurable
-        if configurable and configurable.panel_zoom_enabled ~= nil then
-            configurable.panel_zoom_enabled = 0
-        end
-    end)
-    if not ok then
-        logger.dbg("HoldZoom: could not auto-disable native Panel Zoom:", err)
-    end
 end
 
 function HoldZoom:isComic()
