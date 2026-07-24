@@ -204,9 +204,16 @@ end
 function Zoom:updateZoomCenter()
     local view = self.ui.view
     if view and view.SetZoomCenter then
-        local scale = self.base_zoom * self.zoom_power
-        -- KOReader expects coordinates in points (1/2 pixel), hence the *2 factor
-        view:SetZoomCenter(self.center_x * scale * 2, self.center_y * scale * 2)
+        -- SetZoomCenter(x, y) expects coordinates in page_area space, i.e.
+        -- the page rendered at the TARGET zoom (new_zoom = base_zoom * zoom_power).
+        -- center_x/center_y are captured in screen-space at base_zoom (fit-page),
+        -- since they derive from content_w/content_h which are fixed at entry time.
+        -- Conversion ratio: new_zoom / base_zoom = zoom_power (base_zoom cancels out).
+        -- Confirmed against KOReader's own readerzooming.lua reference implementation
+        -- (xpos = ges.pos.x * self.zoom / self.orig_zoom) — no *2 factor, no base_zoom
+        -- term needed here.
+        local scale = self.zoom_power
+        view:SetZoomCenter(self.center_x * scale, self.center_y * scale)
     else
         logger.info("Zoom: updateZoomCenter: view or SetZoomCenter missing")
     end
