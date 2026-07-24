@@ -354,23 +354,49 @@ function Zoom:decreaseZoomStep()
     end
 end
 
--- Converts a screen-space touch position into page-space coordinates,
--- accounting for the current zoom level and viewport center.
+-- Converts a screen-space touch position into content-space coordinates
+-- (screen-space at base_zoom, i.e. zoom_power = 1 — same space as content_w/
+-- content_h), accounting for the current zoom level and viewport.
 -- Falls back to identity mapping when not zoomed (screen == page).
--- NOTE: content_w/content_h are already in screen-space units at zoom_power=1
--- (base_zoom is baked into them via getContentDimensions), so only zoom_power
--- is needed here — NOT base_zoom * zoom_power (that would double-apply base_zoom).
+--
+-- Rather than recomputing the current viewport from our own center_x/center_y
+-- (which can drift from what KOReader actually did, e.g. when SetZoomCenter's
+-- internal centerWithin clamps near a page edge differently than our own
+-- clamping below), we read the ground-truth viewport directly from
+-- self.ui.view.visible_area. This is the same Geom rect KOReader itself uses
+-- to render the page (see readerview.lua: SetZoomCenter -> visible_area:
+-- centerWithin(page_area, x, y)), expressed in page_area space, i.e. the page
+-- rendered at new_zoom = base_zoom * zoom_power.
 function Zoom:screenPosToPagePos(pos)
     if not self.expanded then
         return pos.x, pos.y
     end
-    local scale = self.zoom_power
+
+    local view = self.ui.view
+    local visible_area = view and view.visible_area
+    if not visible_area then
+        logger.info("Zoom: screenPosToPagePos: visible_area missing, falling back to center-based estimate")
+        local scale = self.zoom_power
+        local screen_w, screen_h = Screen:getWidth(), Screen:getHeight()
+        local page_x = self.center_x + (pos.x - screen_w / 2) / scale
+        local page_y = self.center_y + (pos.y - screen_h / 2) / scale
+        page_x = math.max(0, math.min(page_x, self.content_w))
+        page_y = math.max(0, math.min(page_y, self.content_h))
+        return page_x, page_y
+    end
+
+    -- Map the touch position proportionally within the real visible viewport.
     local screen_w, screen_h = Screen:getWidth(), Screen:getHeight()
-    local page_x = self.center_x + (pos.x - screen_w / 2) / scale
-    local page_y = self.center_y + (pos.y - screen_h / 2) / scale
-    page_x = math.max(0, math.min(page_x, self.content_w))
-    page_y = math.max(0, math.min(page_y, self.content_h))
-    return page_x, page_y
+    local page_area_x = visible_area.x + (pos.x / screen_w) * visible_area.w
+    local page_area_y = visible_area.y + (pos.y / screen_h) * visible_area.h
+
+    -- Convert from page_area space (at new_zoom) back to content-space
+    -- (at base_zoom, zoom_power = 1): new_zoom / base_zoom = zoom_power.
+    local content_x = page_area_x / self.zoom_power
+    local content_y = page_area_y / self.zoom_power
+    content_x = math.max(0, math.min(content_x, self.content_w))
+    content_y = math.max(0, math.min(content_y, self.content_h))
+    return content_x, content_y
 end
 
 return Zoom
