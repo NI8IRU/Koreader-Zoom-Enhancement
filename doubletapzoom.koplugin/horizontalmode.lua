@@ -231,4 +231,10 @@ function HorizontalMode:setSplitRatio(value)
     end
 end
 
+-- Called from the menu alongside AutoRotate:setDirection(), since
+-- rotation_direction is otherwise only read once, at :init() time.
+function HorizontalMode:setRotationDirection(clockwise)
+    self.rotation_direction = clockwise and "cw" or "ccw"
+end
+
 return HorizontalMode

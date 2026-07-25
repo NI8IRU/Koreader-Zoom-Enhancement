@@ -207,10 +207,14 @@ function Menu:build(plugin, Zoom, AutoRotate, HorizontalMode, BigView, Settings)
                         checked_func = function() return AutoRotate.clockwise end,
                         callback = function()
                             AutoRotate:setDirection(true)
+                            HorizontalMode:setRotationDirection(true)
+                            BigView:setRotationDirection(true)
                             self_menu:showMessage("Rotation: Clockwise", 1)
                         end,
                         hold_callback = function()
                             AutoRotate:setDirection(true)
+                            HorizontalMode:setRotationDirection(true)
+                            BigView:setRotationDirection(true)
                             Settings:set("rotate_clockwise", true)
                             self_menu:showMessage("Default rotation: Clockwise")
                         end,
@@ -220,10 +224,14 @@ function Menu:build(plugin, Zoom, AutoRotate, HorizontalMode, BigView, Settings)
                         checked_func = function() return not AutoRotate.clockwise end,
                         callback = function()
                             AutoRotate:setDirection(false)
+                            HorizontalMode:setRotationDirection(false)
+                            BigView:setRotationDirection(false)
                             self_menu:showMessage("Rotation: Counter-clockwise", 1)
                         end,
                         hold_callback = function()
                             AutoRotate:setDirection(false)
+                            HorizontalMode:setRotationDirection(false)
+                            BigView:setRotationDirection(false)
                             Settings:set("rotate_clockwise", false)
                             self_menu:showMessage("Default rotation: Counter-clockwise")
                         end,
@@ -298,8 +306,9 @@ function Menu:build(plugin, Zoom, AutoRotate, HorizontalMode, BigView, Settings)
                             end
                             local enabled = BigView:toggleEnabled()
                             self_menu:showMessage(enabled
-                                and "Big View ON\nSpread two fingers apart to view the current " ..
-                                    "and adjacent page side by side. Pinch to exit."
+                                and "Big View ON\nTwo-finger tap to view the current and adjacent " ..
+                                    "page side by side (only available while zoom trigger is set " ..
+                                    "to Single tap). Tap anywhere to exit."
                                 or "Big View OFF")
                         end,
                         hold_callback = function()
@@ -317,9 +326,10 @@ function Menu:build(plugin, Zoom, AutoRotate, HorizontalMode, BigView, Settings)
                         "Double Tap anywhere to zoom into that grid cell.\n" ..
                         "Double Tap to exit zoom.\n" ..
                         "Tap again (while zoomed) to jump to another cell (left/right side).\n\n" ..
-                        "Big View: spread two fingers apart to see the current page and the " ..
-                        "next/previous page together, side by side. Pinch to exit, or just " ..
-                        "turn the page.\n\n" ..
+                        "Big View: with the zoom trigger set to Single tap, two-finger tap " ..
+                        "the left/right side of the screen to see the current page and the " ..
+                        "next/previous page together, side by side. Tap anywhere to exit, or " ..
+                        "just turn the page.\n\n" ..
                         "Hold a menu option to set it as default.\n\n" ..
                         "Supports: CBZ, CBR, PDF\n\n" ..
                         "Francesco Tornambè"

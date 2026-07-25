@@ -10,9 +10,8 @@ By design this is intentionally minimal: no zoom, no pan, no scroll. It is
 a static overlay composed of two independently rendered, full pages. Any
 page turn, or the reverse gesture, closes it.
 
-Trigger: "spread" gesture (two fingers moving apart) opens Big View.
-Exit: "pinch" gesture (two fingers moving together), any page turn, or
-closing the document.
+Trigger: "two_finger_tap" gesture (two fingers touching the screen) opens Big View.
+Exit: "single_tap" gesture or closing the document.
 
 Unlike Zoom/HorizontalMode, Big View does not use the shared Viewport
 module at all: it renders its own pages via Document:getPagePart() and
@@ -106,10 +105,28 @@ function BigView:init(ui, Settings, Zoom, HorizontalMode)
 
     self.active = false
     self.pre_rotation_mode = nil
-    self.current_pageno = nil
+    -- Seed immediately from whatever's available, instead of waiting for
+    -- the first onPageUpdate, so the gesture works right after opening a
+    -- book too. document:getCurrentPage() isn't present on every Document
+    -- subclass; ReaderPaging (fixed-layout docs: PDF/CBZ/CBR) keeps the
+    -- current page on itself instead, as ui.paging.current_page.
+    if ui.document and ui.document.getCurrentPage then
+        self.current_pageno = ui.document:getCurrentPage()
+        logger.info("BigView: seeded current_pageno from document:getCurrentPage()")
+    elseif ui.paging and ui.paging.current_page then
+        self.current_pageno = ui.paging.current_page
+        logger.info("BigView: seeded current_pageno from ui.paging.current_page")
+    elseif ui.rolling and ui.rolling.current_page then
+        self.current_pageno = ui.rolling.current_page
+        logger.info("BigView: seeded current_pageno from ui.rolling.current_page")
+    else
+        self.current_pageno = nil
+        logger.info("BigView: could not seed current_pageno at init, " ..
+            "will wait for the first onPageUpdate")
+    end
     self.widget = nil
     logger.info("BigView: initialized, enabled=", self.enabled,
-        "rotation_direction=", self.rotation_direction)
+        "rotation_direction=", self.rotation_direction, "current_pageno=", self.current_pageno)
 end
 
 function BigView:setupTouchZones(ui)
@@ -160,38 +177,38 @@ end
 
 function BigView:onEnterGesture(ges)
     if not self.enabled then
-        logger.info("BigView: onSpread ignored, BigView is disabled (check the menu)")
+        logger.info("BigView: onEnterGesture ignored, BigView is disabled (check the menu)")
         return false
     end
     if self.active then
-        logger.info("BigView: onSpread ignored, already active")
+        logger.info("BigView: onEnterGesture ignored, already active")
         return false
     end
 
     local document = self.ui and self.ui.document
     if not document then
-        logger.info("BigView: onSpread ignored, no document (self.ui.document is nil)")
+        logger.info("BigView: onEnterGesture ignored, no document (self.ui.document is nil)")
         return false
     end
     if not self.current_pageno then
-        logger.info("BigView: onSpread ignored, current_pageno is nil (no onPageUpdate seen yet?)")
+        logger.info("BigView: onEnterGesture ignored, current_pageno is nil (no onPageUpdate seen yet?)")
         return false
     end
 
     local pos = ges and ges.pos
     if not pos then
-        logger.info("BigView: onSpread ignored, ges.pos missing")
+        logger.info("BigView: onEnterGesture ignored, ges.pos missing")
         return false
     end
 
     local page_count = document.getPageCount and document:getPageCount()
     if not page_count then
-        logger.info("BigView: onSpread ignored, could not get page_count " ..
+        logger.info("BigView: onEnterGesture ignored, could not get page_count " ..
             "(document:getPageCount missing or returned nil)")
         return false
     end
 
-    logger.info("BigView: onSpread proceeding, current_pageno=", self.current_pageno,
+    logger.info("BigView: onEnterGesture proceeding, current_pageno=", self.current_pageno,
         "page_count=", page_count, "pos.x=", pos.x)
 
     local gesture_side = (pos.x < Screen:getWidth() / 2) and "left" or "right"
@@ -377,6 +394,13 @@ function BigView:exit()
         UIManager:setDirty("all", "full")
     end
     logger.info("BigView: exited")
+end
+
+-- Called from the menu alongside AutoRotate:setDirection()/
+-- HorizontalMode:setRotationDirection(), since rotation_direction is
+-- otherwise only read once, at :init() time.
+function BigView:setRotationDirection(clockwise)
+    self.rotation_direction = clockwise and "cw" or "ccw"
 end
 
 -- Called from HoldZoom:onCloseDocument, as a safety net (mirrors
