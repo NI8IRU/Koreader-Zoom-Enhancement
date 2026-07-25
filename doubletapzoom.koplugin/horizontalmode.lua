@@ -14,6 +14,7 @@ local Device = require("device")
 local Event = require("ui/event")
 local UIManager = require("ui/uimanager")
 local logger = require("logger")
+local Geom = require("ui/geometry")
 local Viewport = require("viewport")
 local Screen = Device.screen
 
@@ -86,28 +87,39 @@ function HorizontalMode:enterHorizontal()
         or Screen.DEVICE_ROTATED_COUNTER_CLOCKWISE
 
     self.pre_rotation_mode = Screen:getRotationMode()
-    logger.info("HorizontalMode: pre-rotation dimen=", Screen:getWidth(), "x", Screen:getHeight())
-
     UIManager:broadcastEvent(Event:new("SetRotationMode", new_rotation))
 
-    -- DEBUG: check whether SetRotationMode is applied synchronously or not.
-    -- If dimen below is already swapped compared to the log above, the
-    -- sequential call to renderHalf() right after is safe. If not, we need
-    -- to hook a post-resize event instead of calling renderHalf() inline.
-    logger.info("HorizontalMode: immediately after broadcast, dimen=", Screen:getWidth(), "x", Screen:getHeight())
+    -- ReaderZooming.dimen is only updated via an explicit SetDimensions
+    -- event, not automatically from Screen:getWidth/getHeight(). Without
+    -- this, any subsequent SetZoomMode/setZoom() call will compute the fit
+    -- using stale (pre-rotation) dimensions.
+    local new_dimen = Geom:new{
+        x = 0, y = 0,
+        w = Screen:getWidth(),
+        h = Screen:getHeight(),
+    }
+    self.ui:handleEvent(Event:new("SetDimensions", new_dimen))
 
     self:renderHalf("top")
 end
 
 function HorizontalMode:exitHorizontal()
     self.active = false
-    Viewport:leave()
 
     if self.pre_rotation_mode then
         Screen:setRotationMode(self.pre_rotation_mode)
         UIManager:broadcastEvent(Event:new("SetRotationMode", self.pre_rotation_mode))
         self.pre_rotation_mode = nil
     end
+
+    local new_dimen = Geom:new{
+        x = 0, y = 0,
+        w = Screen:getWidth(),
+        h = Screen:getHeight(),
+    }
+    self.ui:handleEvent(Event:new("SetDimensions", new_dimen))
+
+    Viewport:leave()
 
     logger.info("HorizontalMode: exited")
 end
