@@ -20,6 +20,7 @@ local DEFAULTS = {
     horizontal_mode_enabled = false,
     horizontal_split_ratio = 0.55,
     horizontal_return_to_vertical = true,
+    bigview_enabled = false,
 }
 
 function Settings:load()

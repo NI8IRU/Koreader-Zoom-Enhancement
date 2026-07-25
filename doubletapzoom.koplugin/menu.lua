@@ -22,7 +22,7 @@ local TRIGGER_GESTURE_OPTIONS = {
     { id = "single_tap", text = _("Single tap") },
 }
 
-function Menu:build(plugin, Zoom, AutoRotate, HorizontalMode, Settings)
+function Menu:build(plugin, Zoom, AutoRotate, HorizontalMode, BigView, Settings)
     local self_menu = self
 
     local function isTriggerConflict(trigger_gesture, horizontal_enabled)
@@ -286,6 +286,30 @@ function Menu:build(plugin, Zoom, AutoRotate, HorizontalMode, Settings)
                 },
             },
             {
+                text = _("Big View (two-page spread)"),
+                sub_item_table = {
+                    {
+                        text = _("Enable Big View"),
+                        checked_func = function() return BigView.enabled end,
+                        callback = function()
+                            if not plugin:isComic() then
+                                self_menu:showMessage("Open a CBZ, CBR or PDF file first.")
+                                return
+                            end
+                            local enabled = BigView:toggleEnabled()
+                            self_menu:showMessage(enabled
+                                and "Big View ON\nSpread two fingers apart to view the current " ..
+                                    "and adjacent page side by side. Pinch to exit."
+                                or "Big View OFF")
+                        end,
+                        hold_callback = function()
+                            Settings:set("bigview_enabled", BigView.enabled)
+                            self_menu:showMessage("Big View default: " .. (BigView.enabled and "ON" or "OFF"))
+                        end,
+                    },
+                },
+            },
+            {
                 text = _("About"),
                 callback = function()
                     self_menu:showMessage(
@@ -293,6 +317,9 @@ function Menu:build(plugin, Zoom, AutoRotate, HorizontalMode, Settings)
                         "Double Tap anywhere to zoom into that grid cell.\n" ..
                         "Double Tap to exit zoom.\n" ..
                         "Tap again (while zoomed) to jump to another cell (left/right side).\n\n" ..
+                        "Big View: spread two fingers apart to see the current page and the " ..
+                        "next/previous page together, side by side. Pinch to exit, or just " ..
+                        "turn the page.\n\n" ..
                         "Hold a menu option to set it as default.\n\n" ..
                         "Supports: CBZ, CBR, PDF\n\n" ..
                         "Francesco Tornambè"
