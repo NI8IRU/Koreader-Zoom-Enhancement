@@ -22,8 +22,12 @@ local TRIGGER_GESTURE_OPTIONS = {
     { id = "single_tap", text = _("Single tap") },
 }
 
-function Menu:build(plugin, Zoom, AutoRotate, Settings)
+function Menu:build(plugin, Zoom, AutoRotate, HorizontalMode, Settings)
     local self_menu = self
+
+    local function isTriggerConflict(trigger_gesture, horizontal_enabled)
+        return trigger_gesture == "double_tap" and horizontal_enabled
+    end
 
     -- Trigger gesture
     local trigger_gesture_items = {}
@@ -32,6 +36,16 @@ function Menu:build(plugin, Zoom, AutoRotate, Settings)
             text = opt.text,
             checked_func = function() return Zoom.trigger_gesture == opt.id end,
             callback = function()
+                if isTriggerConflict(opt.id, HorizontalMode.enabled) then
+                    self_menu:showMessage(
+                        "Cannot switch to Double tap: Horizontal mode is enabled.\n\n" ..
+                        "Horizontal mode currently relies on Double tap being free " ..
+                        "to trigger the two-finger-tap rotation gesture. " ..
+                        "Disable Horizontal mode first.",
+                        5
+                    )
+                    return
+                end
                 Zoom:setTriggerGesture(opt.id)
                 if opt.id == "single_tap" then
                     self_menu:showMessage(
@@ -45,6 +59,10 @@ function Menu:build(plugin, Zoom, AutoRotate, Settings)
                 end
             end,
             hold_callback = function()
+                if isTriggerConflict(opt.id, HorizontalMode.enabled) then
+                    self_menu:showMessage("Cannot set as default: Horizontal mode is enabled.", 3)
+                    return
+                end
                 Zoom:setTriggerGesture(opt.id)
                 Settings:set("zoom_trigger_gesture", opt.id)
                 self_menu:showMessage(string.format("Default trigger: %s", opt.text))
@@ -86,6 +104,26 @@ function Menu:build(plugin, Zoom, AutoRotate, Settings)
                 Zoom:setGrid(cols, Zoom.grid_rows)
                 Settings:set("grid_cols", cols)
                 self_menu:showMessage(string.format("Default columns: %d", cols))
+            end,
+        })
+    end
+
+    -- Horizontal mode split ratio submenu
+    local SPLIT_RATIO_OPTIONS = { 0.50, 0.55, 0.60, 0.65 }
+    local split_ratio_items = {}
+    for _, value in ipairs(SPLIT_RATIO_OPTIONS) do
+        local display = string.format("%d%%", value * 100)
+        table.insert(split_ratio_items, {
+            text = display,
+            checked_func = function() return HorizontalMode.split_ratio == value end,
+            callback = function()
+                HorizontalMode:setSplitRatio(value)
+                self_menu:showMessage(string.format("Split ratio: %s", display), 1)
+            end,
+            hold_callback = function()
+                HorizontalMode:setSplitRatio(value)
+                Settings:set("horizontal_split_ratio", value)
+                self_menu:showMessage(string.format("Default split ratio: %s", display))
             end,
         })
     end
@@ -188,6 +226,61 @@ function Menu:build(plugin, Zoom, AutoRotate, Settings)
                             AutoRotate:setDirection(false)
                             Settings:set("rotate_clockwise", false)
                             self_menu:showMessage("Default rotation: Counter-clockwise")
+                        end,
+                    },
+                },
+            },
+            {
+                text = _("Horizontal reading mode"),
+                sub_item_table = {
+                    {
+                        text = _("Enable horizontal mode"),
+                        checked_func = function() return HorizontalMode.enabled end,
+                        callback = function()
+                            if isTriggerConflict(Zoom.trigger_gesture, not HorizontalMode.enabled) then
+                                self_menu:showMessage(
+                                    "Cannot enable: zoom trigger is set to Double tap.\n\n" ..
+                                    "Horizontal mode would then trigger with a two-finger tap. " ..
+                                    "Set the zoom trigger to Single tap first, or wait for the " ..
+                                    "dedicated horizontal-mode trigger setting.",
+                                    5
+                                )
+                                return
+                            end
+                            HorizontalMode.enabled = not HorizontalMode.enabled
+                            self_menu:showMessage(HorizontalMode.enabled
+                                and "Horizontal mode ON"
+                                or "Horizontal mode OFF")
+                        end,
+                        hold_callback = function()
+                            if isTriggerConflict(Zoom.trigger_gesture, not HorizontalMode.enabled) then
+                                self_menu:showMessage("Cannot enable while zoom trigger is Double tap.", 3)
+                                return
+                            end
+                            HorizontalMode.enabled = not HorizontalMode.enabled
+                            Settings:set("horizontal_mode_enabled", HorizontalMode.enabled)
+                            self_menu:showMessage("Horizontal mode default: " ..
+                                (HorizontalMode.enabled and "ON" or "OFF"))
+                        end,
+                    },
+                    {
+                        text = _("Split ratio"),
+                        sub_item_table = split_ratio_items,
+                    },
+                    {
+                        text = _("Return to vertical after page turn"),
+                        checked_func = function() return HorizontalMode.return_to_vertical end,
+                        callback = function()
+                            local enabled = HorizontalMode:toggleReturnToVertical()
+                            self_menu:showMessage(enabled
+                                and "Will return to vertical after each page turn"
+                                or "Will stay in horizontal mode across pages")
+                        end,
+                        hold_callback = function()
+                            HorizontalMode:toggleReturnToVertical()
+                            Settings:set("horizontal_return_to_vertical", HorizontalMode.return_to_vertical)
+                            self_menu:showMessage("Default: " ..
+                                (HorizontalMode.return_to_vertical and "ON" or "OFF"))
                         end,
                     },
                 },
