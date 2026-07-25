@@ -26,7 +26,6 @@ local Zoom = {
     center_x = nil,
     center_y = nil,
     original_zoom_mode = nil,
-    base_zoom = nil,             -- fit-page zoom captured when entering zoom mode
     current_cell = nil,          -- current cell index (1..grid_cols*grid_rows)
     grid_cols = 2,
     grid_rows = 2,
@@ -51,7 +50,7 @@ function Zoom:init(ui, Settings)
     self.center_x = nil
     self.center_y = nil
     self.original_zoom_mode = nil
-    self.base_zoom = nil
+    Viewport.base_zoom = nil
     self.content_w = nil
     self.content_h = nil
     logger.info("Zoom: initialized with default_zoom_power=", self.default_zoom_power,
@@ -65,7 +64,7 @@ function Zoom:reset()
     self.center_y = nil
     self.original_zoom_mode = nil
     self.current_cell = nil
-    self.base_zoom = nil
+    Viewport.base_zoom = nil
     self.content_w = nil
     self.content_h = nil
     logger.info("Zoom: reset")
@@ -319,7 +318,7 @@ function Zoom:updateZoomFactor(new_factor)
         return
     end
 
-    local new_zoom = self.base_zoom * self.zoom_power
+    local new_zoom = Viewport.base_zoom * self.zoom_power
     zooming.zoom = new_zoom
     view:onZoomUpdate(new_zoom)
     self:updateZoomCenter()
