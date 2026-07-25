@@ -51,13 +51,21 @@ function BigViewWidget:init()
         h = Screen:getHeight(),
     }
     self.ges_events = {
-        Pinch = {
-            GestureRange:new{ ges = "pinch", range = self.dimen },
+        Tap = {
+            GestureRange:new{ ges = "tap", range = self.dimen },
         },
     }
 end
 
+local Blitbuffer = require("ffi/blitbuffer")
+
 function BigViewWidget:paintTo(bb, x, y)
+    -- Solid black background across the whole widget first: covers any
+    -- gap left by aspect-ratio letterboxing around each half-page, and
+    -- (more importantly) any leftover stale pixels if self.dimen doesn't
+    -- exactly match what actually needs repainting.
+    bb:paintRect(x, y, self.dimen.w, self.dimen.h, Blitbuffer.COLOR_WHITE)
+
     if self.left_bb then
         bb:blitFrom(self.left_bb, x + self.left_x, y + self.left_y, 0, 0,
             self.left_bb:getWidth(), self.left_bb:getHeight())
@@ -68,7 +76,7 @@ function BigViewWidget:paintTo(bb, x, y)
     end
 end
 
-function BigViewWidget:onPinch()
+function BigViewWidget:onTap()
     if self.on_exit then self.on_exit() end
     return true
 end
@@ -111,13 +119,13 @@ function BigView:setupTouchZones(ui)
     local full_screen = { ratio_x = 0, ratio_y = 0, ratio_w = 1, ratio_h = 1 }
     ui:registerTouchZones({
         {
-            id = "bigview_spread",
-            ges = "spread",
+            id = "bigview_twofingertap",
+            ges = "two_finger_tap",
             screen_zone = full_screen,
-            handler = function(ges) return self:onSpread(ges) end,
+            handler = function(ges) return self:onTwoFingerTap(ges) end,
         },
     })
-    logger.info("BigView: touch zones registered")
+    logger.info("BigView: touch zones registered (two_finger_tap)")
 end
 
 function BigView:toggleEnabled()
@@ -137,7 +145,20 @@ function BigView:onPageUpdate(pageno)
     end
 end
 
-function BigView:onSpread(ges)
+-- Only usable when two_finger_tap is otherwise free: Zoom's own
+-- two_finger_tap handler triggers HorizontalMode's rotate whenever
+-- Zoom.trigger_gesture == "double_tap" (see ROTATE_TRIGGER_MAP in
+-- zoom.lua). Big View only claims this gesture when Zoom's trigger is
+-- "single_tap" (which frees two_finger_tap, since the rotate trigger
+-- becomes a one-finger double_tap in that case).
+function BigView:onTwoFingerTap(ges)
+    if not self.zoom or self.zoom.trigger_gesture ~= "single_tap" then
+        return false
+    end
+    return self:onEnterGesture(ges)
+end
+
+function BigView:onEnterGesture(ges)
     if not self.enabled then
         logger.info("BigView: onSpread ignored, BigView is disabled (check the menu)")
         return false
@@ -263,6 +284,10 @@ function BigView:enter(left_pageno, right_pageno)
     self.widget = widget
     self.active = true
     UIManager:show(widget)
+    -- Force a full (not partial) refresh of the ENTIRE screen, not just
+    -- this widget's own dimen: after a rotation-mode change, a partial
+    -- refresh can leave stale pixels around the edges uncovered.
+    UIManager:setDirty("all", "full")
     logger.info("BigView: entered and UIManager:show() called, pages=(", left_pageno, ",", right_pageno,
         ") left_bb=", left_bb ~= nil, "right_bb=", right_bb ~= nil)
 end
@@ -349,7 +374,7 @@ function BigView:exit()
     end
 
     if self.ui and self.ui.view then
-        UIManager:setDirty(self.ui.view, "full")
+        UIManager:setDirty("all", "full")
     end
     logger.info("BigView: exited")
 end

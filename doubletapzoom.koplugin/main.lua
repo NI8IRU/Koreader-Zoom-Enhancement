@@ -52,32 +52,34 @@ function HoldZoom:onReaderReady()
 end
 
 -- DEV/TEST ONLY, see DEBUG_KEY_GESTURES above.
--- S / D = spread on the left / right half of the screen (enter Big View
---         with the corresponding page pair).
--- P     = pinch (exit Big View).
+-- S / D = two_finger_tap on the left / right half of the screen (enter
+--         Big View with the corresponding page pair). Note: this only
+--         actually does anything in-game when Zoom.trigger_gesture ==
+--         "single_tap" (see BigView:onTwoFingerTap's gating).
+-- P     = tap (exit Big View).
 function HoldZoom:setupDebugKeyEvents()
-    self.key_events.DebugBigViewSpreadLeft = { {"Q"} }
-    self.key_events.DebugBigViewSpreadRight = { {"W"} }
-    self.key_events.DebugBigViewPinch = { {"E"} }
-    logger.info("HoldZoom: [DEBUG] keyboard gesture mapper active (Q/W = spread left/right, E = pinch)")
+    self.key_events.DebugBigViewEnterLeft = { {"Q"} }
+    self.key_events.DebugBigViewEnterRight = { {"W"} }
+    self.key_events.DebugBigViewExit = { {"E"} }
+    logger.info("HoldZoom: [DEBUG] keyboard gesture mapper active (Q/W = enter left/right, E = exit)")
 end
 
-function HoldZoom:onDebugBigViewSpreadLeft()
+function HoldZoom:onDebugBigViewEnterLeft()
     local screen_h = Device.screen:getHeight()
-    logger.info("HoldZoom: [DEBUG] simulating spread on LEFT side")
-    BigView:onSpread({ pos = { x = 0, y = screen_h / 2 } })
+    logger.info("HoldZoom: [DEBUG] simulating two_finger_tap on LEFT side")
+    BigView:onTwoFingerTap({ pos = { x = 0, y = screen_h / 2 } })
     return true
 end
 
-function HoldZoom:onDebugBigViewSpreadRight()
+function HoldZoom:onDebugBigViewEnterRight()
     local screen_w, screen_h = Device.screen:getWidth(), Device.screen:getHeight()
-    logger.info("HoldZoom: [DEBUG] simulating spread on RIGHT side")
-    BigView:onSpread({ pos = { x = screen_w - 1, y = screen_h / 2 } })
+    logger.info("HoldZoom: [DEBUG] simulating two_finger_tap on RIGHT side")
+    BigView:onTwoFingerTap({ pos = { x = screen_w - 1, y = screen_h / 2 } })
     return true
 end
 
-function HoldZoom:onDebugBigViewPinch()
-    logger.info("HoldZoom: [DEBUG] simulating pinch (exit)")
+function HoldZoom:onDebugBigViewExit()
+    logger.info("HoldZoom: [DEBUG] simulating tap (exit)")
     BigView:exit()
     return true
 end
