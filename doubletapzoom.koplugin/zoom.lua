@@ -10,8 +10,14 @@ repeat the trigger gesture to exit.
 local Device = require("device")
 local Event = require("ui/event")
 local UIManager = require("ui/uimanager")
+local Viewport = require("viewport")
 local logger = require("logger")
 local Screen = Device.screen
+
+local ROTATE_TRIGGER_MAP = {
+    single_tap = "double_tap",
+    double_tap = "two_finger_tap",
+}
 
 local Zoom = {
     enabled = true,
@@ -39,6 +45,7 @@ function Zoom:init(ui, Settings)
     self.grid_cols = Settings:get("grid_cols") or 2
     self.grid_rows = Settings:get("grid_rows") or 2
     self.trigger_gesture = Settings:get("zoom_trigger_gesture") or "double_tap"
+    self.rotate_trigger_gesture = ROTATE_TRIGGER_MAP[self.trigger_gesture] or "two_finger_tap"
     self.current_cell = nil
     self.expanded = false
     self.center_x = nil
@@ -91,6 +98,12 @@ function Zoom:setupTouchZones(ui)
             ges = "swipe",
             screen_zone = full_screen,
             handler = function(ges) return self:onSwipe(ges) end,
+        },
+        {
+            id = "holdzoom_twofingertap",
+            ges = "two_finger_tap",
+            screen_zone = full_screen,
+            handler = function(ges) return self:onTwoFingerTap(ges) end,
         },
     }
 
@@ -145,6 +158,9 @@ function Zoom:getCellFromCenter()
 end
 
 function Zoom:onDoubleTap(ges)
+    if self.trigger_gesture == "single_tap" then
+        return self:onRotateTrigger(ges)
+    end
     if self.trigger_gesture ~= "double_tap" then return false end
     return self:handleZoomGesture(ges, "double tap")
 end
@@ -152,6 +168,21 @@ end
 function Zoom:onTap(ges)
     if self.trigger_gesture ~= "single_tap" then return false end
     return self:handleZoomGesture(ges, "single tap")
+end
+
+function Zoom:onTwoFingerTap(ges)
+    if self.trigger_gesture ~= "double_tap" then return false end
+    return self:onRotateTrigger(ges)
+end
+
+function Zoom:onRotateTrigger(ges)
+    if self.expanded then
+        logger.info("Zoom: onRotateTrigger - collapsing zoom before rotating")
+        self:collapse()
+    end
+    logger.info("Zoom: rotate trigger fired via", self.rotate_trigger_gesture)
+    self.ui.horizontal_mode:toggle(ges.pos)
+    return true
 end
 
 function Zoom:handleZoomGesture(ges, source)
@@ -182,7 +213,7 @@ function Zoom:onSwipe(ges)
     local pos = ges and ges.pos
 
     if pos then
-        local page_x, page_y = self:screenPosToPagePos(pos)
+        local page_x, page_y = Viewport:screenPosToPagePos(pos)
         local cell = self:cellFromPos({x = page_x, y = page_y})
         if cell and cell ~= self.current_cell then
             self.current_cell = cell
@@ -221,60 +252,26 @@ end
 
 -- Zoom into the specified cell (1..total)
 function Zoom:zoomToCell(cell)
-    local view = self.ui.view
-    local zooming = self.ui.zooming
-    if not view or not zooming then
-        logger.info("Zoom: zoomToCell: view or zooming missing")
-        return
-    end
-
     if not self.expanded then
-        -- Capture content dimensions once when entering zoom mode.
-        self.content_w, self.content_h = self:getContentDimensions()
-        self.original_zoom_mode = zooming.zoom_mode
-        self.base_zoom = zooming.zoom or 1
+        if not Viewport:enter(self.ui, "zoom") then return end
+        self.content_w, self.content_h = Viewport.content_w, Viewport.content_h
         self.expanded = true
-        logger.info("Zoom: entering zoom mode, content=(", self.content_w, ",", self.content_h, ") base_zoom=", self.base_zoom)
-
-        -- Switch to "free" zoom mode without triggering KOReader's SetZoomMode event.
-        -- This avoids a crash in koptoptions.lua if the user opens the config dialog.
-        zooming.zoom_mode = "free"
-        view.zoom_mode = "free"
     end
 
     self.current_cell = cell
     self.center_x, self.center_y = self:calcCenterForCell(cell)
-
-    local new_zoom = self.base_zoom * self.zoom_power
-    zooming.zoom = new_zoom
-
-    view:onZoomUpdate(new_zoom)
-    self:updateZoomCenter()
-
-    self.ui:handleEvent(Event:new("RedrawCurrentView"))
-    UIManager:setDirty(view, "full")
+    Viewport:setCenter(self.center_x, self.center_y, self.zoom_power)
 
     logger.info("Zoom: zoomed to cell", cell, "zoom_power=", self.zoom_power)
 end
 
 function Zoom:collapse()
-    local zooming = self.ui.zooming
-    if not zooming then return end
-
+    Viewport:leave()
     self.expanded = false
     self.current_cell = nil
-    self.base_zoom = nil
+    self.zoom_power = self.default_zoom_power
     self.content_w = nil
     self.content_h = nil
-    self.zoom_power = self.default_zoom_power
-
-    -- Restore the original zoom mode via event.
-    self.ui:handleEvent(Event:new("SetZoomMode", self.original_zoom_mode or "page"))
-    self.original_zoom_mode = nil
-
-    self.ui:handleEvent(Event:new("RedrawCurrentView"))
-    UIManager:setDirty(self.ui.view, "full")
-
     logger.info("Zoom: collapsed")
 end
 
@@ -298,11 +295,6 @@ end
 function Zoom:setGrid(cols, rows)
     self.grid_cols = cols
     self.grid_rows = rows
-end
-
-function Zoom:setTriggerGesture(gesture)
-    self.trigger_gesture = gesture
-    logger.info("Zoom: setTriggerGesture:", gesture)
 end
 
 -- Update the zoom factor (zoom_power) and recalculate the center
@@ -354,49 +346,10 @@ function Zoom:decreaseZoomStep()
     end
 end
 
--- Converts a screen-space touch position into content-space coordinates
--- (screen-space at base_zoom, i.e. zoom_power = 1 — same space as content_w/
--- content_h), accounting for the current zoom level and viewport.
--- Falls back to identity mapping when not zoomed (screen == page).
---
--- Rather than recomputing the current viewport from our own center_x/center_y
--- (which can drift from what KOReader actually did, e.g. when SetZoomCenter's
--- internal centerWithin clamps near a page edge differently than our own
--- clamping below), we read the ground-truth viewport directly from
--- self.ui.view.visible_area. This is the same Geom rect KOReader itself uses
--- to render the page (see readerview.lua: SetZoomCenter -> visible_area:
--- centerWithin(page_area, x, y)), expressed in page_area space, i.e. the page
--- rendered at new_zoom = base_zoom * zoom_power.
-function Zoom:screenPosToPagePos(pos)
-    if not self.expanded then
-        return pos.x, pos.y
-    end
-
-    local view = self.ui.view
-    local visible_area = view and view.visible_area
-    if not visible_area then
-        logger.info("Zoom: screenPosToPagePos: visible_area missing, falling back to center-based estimate")
-        local scale = self.zoom_power
-        local screen_w, screen_h = Screen:getWidth(), Screen:getHeight()
-        local page_x = self.center_x + (pos.x - screen_w / 2) / scale
-        local page_y = self.center_y + (pos.y - screen_h / 2) / scale
-        page_x = math.max(0, math.min(page_x, self.content_w))
-        page_y = math.max(0, math.min(page_y, self.content_h))
-        return page_x, page_y
-    end
-
-    -- Map the touch position proportionally within the real visible viewport.
-    local screen_w, screen_h = Screen:getWidth(), Screen:getHeight()
-    local page_area_x = visible_area.x + (pos.x / screen_w) * visible_area.w
-    local page_area_y = visible_area.y + (pos.y / screen_h) * visible_area.h
-
-    -- Convert from page_area space (at new_zoom) back to content-space
-    -- (at base_zoom, zoom_power = 1): new_zoom / base_zoom = zoom_power.
-    local content_x = page_area_x / self.zoom_power
-    local content_y = page_area_y / self.zoom_power
-    content_x = math.max(0, math.min(content_x, self.content_w))
-    content_y = math.max(0, math.min(content_y, self.content_h))
-    return content_x, content_y
+function Zoom:setTriggerGesture(gesture)
+    self.trigger_gesture = gesture
+    self.rotate_trigger_gesture = ROTATE_TRIGGER_MAP[gesture] or "two_finger_tap"
+    logger.info("Zoom: setTriggerGesture:", gesture, "rotate_trigger:", self.rotate_trigger_gesture)
 end
 
 return Zoom

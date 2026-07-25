@@ -17,6 +17,9 @@ local DEFAULTS = {
     rotate_clockwise = true,
     grid_cols = 2,
     grid_rows = 2,
+    horizontal_mode_enabled = false,
+    horizontal_split_ratio = 0.55,
+    horizontal_return_to_vertical = true,
 }
 
 function Settings:load()
